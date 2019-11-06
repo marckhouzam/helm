@@ -257,6 +257,13 @@ __helm_list_releases_then_charts() {
     fi
 }
 
+__helm_call_plugin_completion() {
+    __helm_debug "${FUNCNAME[0]}: c is $c words[@] is ${words[@]}"
+    if out=$(eval ${words[@]} __complete__ 2>/dev/null); then
+        COMPREPLY=( $( compgen -W "${out[*]}" -- "$cur" ) )
+    fi
+}
+
 __helm_custom_func()
 {
     __helm_debug "${FUNCNAME[0]}: last_command is $last_command"
@@ -291,6 +298,8 @@ __helm_custom_func()
             return
             ;;
         *)
+            __helm_call_plugin_completion
+            return
             ;;
     esac
 }
