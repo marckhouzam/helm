@@ -241,14 +241,16 @@ __helm_list_plugins()
     fi
 }
 
-__helm_list_charts_after_name() {
+__helm_list_charts_after_name()
+{
     __helm_debug "${FUNCNAME[0]}: last_command is $last_command"
     if [[ ${#nouns[@]} -eq 1 ]]; then
         __helm_list_charts 1
     fi
 }
 
-__helm_list_releases_then_charts() {
+__helm_list_releases_then_charts()
+{
     __helm_debug "${FUNCNAME[0]}: last_command is $last_command"
     if [[ ${#nouns[@]} -eq 0 ]]; then
         __helm_list_releases
@@ -257,10 +259,23 @@ __helm_list_releases_then_charts() {
     fi
 }
 
-__helm_call_plugin_completion() {
-    __helm_debug "${FUNCNAME[0]}: c is $c words[@] is ${words[@]}"
-    if out=$(eval ${words[@]} __complete__ 2>/dev/null); then
-        COMPREPLY=( $( compgen -W "${out[*]}" -- "$cur" ) )
+__helm_call_plugin_completion()
+{
+    __helm_debug "${FUNCNAME[0]}: c is $c #words is ${#words[@]} words[@] is ${words[@]}"
+    local pluginName=${last_command#*_}
+    local pluginDir=$(eval $(__helm_binary_name) env 2>/dev/null | \grep HELM_PLUGINS | \cut -d= -f2 | \sed s/\"//g)/helm-${pluginName}
+    local pluginCompletion=$pluginDir/${pluginName}.completion
+    local params="${words[@]}"
+    # If the last parameter is complete (there is a space following it)
+    # We add an extra fake parameter so the plugin can know
+    # For example "helm 2to3 con<TAB>" should complete differently than "helm 2to3 convert <TAB>"
+    [ $c -eq ${#words[@]} ] && params+=" _"
+
+    __helm_debug "${FUNCNAME[0]}: Executing the following file to get plugin completions: $pluginCompletion"
+    __helm_debug "${FUNCNAME[0]}: with the following params \"$params\""
+    if out=$(eval $pluginCompletion $params 2>/dev/null); then
+        __helm_debug "${FUNCNAME[0]}: plugin returned: ${out[*]}"
+        COMPREPLY+=( $( compgen -W "${out[*]}" -- "$cur" ) )
     fi
 }
 
