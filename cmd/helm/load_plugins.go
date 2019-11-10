@@ -18,6 +18,8 @@ package main
 import (
 	"fmt"
 	"io"
+	"io/ioutil"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,6 +28,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
+	"sigs.k8s.io/yaml"
 
 	"helm.sh/helm/v3/pkg/plugin"
 )
@@ -59,6 +62,12 @@ func loadPlugins(baseCmd *cobra.Command, out io.Writer) {
 			return nil, err
 		}
 		return u, nil
+	}
+
+	// If we are dealing with the completion command, we load more details about the plugins
+	if subCmd, _, err := baseCmd.Find(os.Args[1:]); err == nil && subCmd.Name() == "completion" {
+		loadPluginsForCompletion(baseCmd, found)
+		return
 	}
 
 	// Now we create commands for all of these.
@@ -166,4 +175,105 @@ func findPlugins(plugdirs string) ([]*plugin.Plugin, error) {
 		found = append(found, matches...)
 	}
 	return found, nil
+}
+
+// pluginCommand represents the optional completion.yaml file of a plugin
+type pluginCommand struct {
+	Name     string          `json:"name"`
+	Flags    []string        `json:"flags"`
+	Commands []pluginCommand `json:"commands"`
+}
+
+func loadPluginsForCompletion(baseCmd *cobra.Command, plugins []*plugin.Plugin) {
+	for _, plug := range plugins {
+		// Parse the yaml file providing the plugins subcmds and flags
+		cmds, err := loadFile(strings.Join(
+			[]string{settings.PluginsDirectory, "helm-" + plug.Metadata.Name, "completion.yaml"}, string(filepath.Separator)))
+
+		if err != nil {
+			// The file could be missing or invalid.  Either way, we just continue on.
+			if settings.Debug {
+				log.Output(2, fmt.Sprintf("[info] %s\n", err.Error()))
+			}
+			continue
+		}
+
+		// We know what the plugin name must be.
+		// Let's set it in case the Name field was not specified in the file.
+		cmds.Name = plug.Metadata.Name
+		addPluginCommands(baseCmd, cmds)
+	}
+}
+
+func addPluginCommands(baseCmd *cobra.Command, cmds *pluginCommand) {
+	if cmds == nil {
+		return
+	}
+
+	if len(cmds.Name) == 0 {
+		// Missing name for a command
+		if settings.Debug {
+			log.Output(2, fmt.Sprintf("[info] sub-command name field missing for %s", baseCmd.CommandPath()))
+		}
+		return
+	}
+
+	// Create a fake command
+	c := &cobra.Command{
+		Use: cmds.Name,
+		// A Run is required for it to be a valid command
+		Run: func(cmd *cobra.Command, args []string) {},
+	}
+	baseCmd.AddCommand(c)
+
+	// Create fake flags.  They don't need to be typed properly, they just need to exist.
+	// pflag does not allow to create short flags without a corresponding long form
+	// so we look for all short flags and match them to any long flag.  This will allow
+	// plugins to provide short flags without a long form.
+	// If there are more short-flags than long ones, we'll create the short flag with the
+	// same single letter as the long form.
+	shorts := []string{}
+	longs := []string{}
+	for _, flag := range cmds.Flags {
+		if len(flag) == 1 {
+			shorts = append(shorts, flag)
+		} else {
+			longs = append(longs, flag)
+		}
+	}
+
+	f := c.Flags()
+	if len(longs) >= len(shorts) {
+		for i := range longs {
+			if len(shorts) > i {
+				f.BoolP(longs[i], shorts[i], false, "")
+			} else {
+				f.Bool(longs[i], false, "")
+			}
+		}
+	} else {
+		for i, short := range shorts {
+			long := short
+			if len(longs) > i {
+				long = longs[i]
+			}
+			f.BoolP(long, short, false, "")
+		}
+	}
+	// Add any sub-commands
+	for _, cmd := range cmds.Commands {
+		addPluginCommands(c, &cmd)
+	}
+}
+
+// LoadFile takes a file at the given path and returns a pluginCommand object
+func loadFile(path string) (*pluginCommand, error) {
+	cmds := new(pluginCommand)
+	b, err := ioutil.ReadFile(path)
+	if err != nil {
+		return cmds, errors.New(fmt.Sprintf("File (%s) not provided by plugin. No further completion possible.", path))
+	}
+
+	err = yaml.Unmarshal(b, cmds)
+	return cmds, err
 }
